@@ -13,7 +13,6 @@ export interface CallbackHandlerOptions {
   redirectUri: string;
   cookieName?: string;
   accessCookieName?: string;
-  cookieDomain?: string;
   cookieMaxAge?: number;
   defaultRedirect?: string;
 }
@@ -26,7 +25,6 @@ export function createCallbackHandler(options: CallbackHandlerOptions) {
     redirectUri,
     cookieName = "am25_sess",
     accessCookieName = "am25_at",
-    cookieDomain,
     cookieMaxAge = 60 * 60 * 24 * 30,
     defaultRedirect = "/dashboard",
   } = options;
@@ -147,7 +145,6 @@ export function createCallbackHandler(options: CallbackHandlerOptions) {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax" as const,
-        domain: cookieDomain,
         path: "/",
       };
 

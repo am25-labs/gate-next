@@ -8,7 +8,6 @@ export interface LogoutHandlerOptions {
   redirectUri: string;
   cookieName?: string;
   accessCookieName?: string;
-  cookieDomain?: string;
   redirectTo?: string;
 }
 
@@ -20,7 +19,6 @@ export function createLogoutHandler(options: LogoutHandlerOptions) {
     redirectUri,
     cookieName = "am25_sess",
     accessCookieName = "am25_at",
-    cookieDomain,
     redirectTo = "/",
   } = options;
 
@@ -76,7 +74,6 @@ export function createLogoutHandler(options: LogoutHandlerOptions) {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      domain: cookieDomain,
       maxAge: 0,
       path: "/",
     });
@@ -85,7 +82,6 @@ export function createLogoutHandler(options: LogoutHandlerOptions) {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      domain: cookieDomain,
       maxAge: 0,
       path: "/",
     });

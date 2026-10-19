@@ -9,7 +9,7 @@ Server-side SDK for integrating Next.js 16+ applications with **AM25 Gate IdP**,
 - OAuth 2.0 + OIDC: Authorization Code flow with PKCE S256 and nonce validation
 - Login CSRF protection: short-lived host-only transaction cookies and one-time state
 - Proxy for Next.js 16: Server-level route protection
-- httpOnly Cookie: Secure session shared across subdomains
+- Host-only httpOnly cookies: Each app keeps its own session; Gate provides SSO through authorization redirects
 - React Helpers: Cached functions for Server Components
 - RS256 (JWKS): Token verification using public keys, no shared secrets
 - Assigned users: Fetch the users assigned to the current client app
@@ -47,13 +47,11 @@ GATE_ISSUER=https://gate.example.com
 GATE_CLIENT_ID=your-client-id
 GATE_CLIENT_SECRET=your-client-secret
 GATE_REDIRECT_URI=https://myapp.example.com/api/auth/callback
-
-# Cookie
-COOKIE_DOMAIN=.example.com
-
 ```
 
 You do not need `JWT_SECRET`. Tokens are verified using Gate's public key (JWKS).
+
+Session and access cookies are host-only and cannot be shared through a domain option. Each app establishes its own cookies through its OAuth callback. Gate maintains its central session on its own host, allowing authorization without another credential prompt while that session remains valid.
 
 ### 2. Create API Routes
 
@@ -90,7 +88,6 @@ const handler = createCallbackHandler({
   clientId: process.env.GATE_CLIENT_ID!,
   clientSecret: process.env.GATE_CLIENT_SECRET!,
   redirectUri: process.env.GATE_REDIRECT_URI!,
-  cookieDomain: process.env.COOKIE_DOMAIN,
   defaultRedirect: "/dashboard",
 });
 
@@ -110,7 +107,6 @@ const handler = createCallbackHandler({
   clientId: process.env.GATE_CLIENT_ID,
   clientSecret: process.env.GATE_CLIENT_SECRET,
   redirectUri: process.env.GATE_REDIRECT_URI,
-  cookieDomain: process.env.COOKIE_DOMAIN,
   defaultRedirect: "/dashboard",
 });
 
@@ -134,7 +130,6 @@ const handler = createLogoutHandler({
   clientId: process.env.GATE_CLIENT_ID!,
   clientSecret: process.env.GATE_CLIENT_SECRET,
   redirectUri: process.env.GATE_REDIRECT_URI!,
-  cookieDomain: process.env.COOKIE_DOMAIN,
   redirectTo: "/",
 });
 
@@ -154,7 +149,6 @@ const handler = createLogoutHandler({
   clientId: process.env.GATE_CLIENT_ID,
   clientSecret: process.env.GATE_CLIENT_SECRET,
   redirectUri: process.env.GATE_REDIRECT_URI,
-  cookieDomain: process.env.COOKIE_DOMAIN,
   redirectTo: "/",
 });
 
@@ -522,7 +516,6 @@ Creates the handler to exchange the authorization code for tokens.
 | `redirectUri`     | string | Yes      |                 | Callback URI (must match Gate config) |
 | `cookieName`      | string | No       | `"am25_sess"`   | Session cookie name                   |
 | `accessCookieName` | string | No       | `"am25_at"`     | Access token cookie name              |
-| `cookieDomain`    | string | No       |                 | Cookie domain (e.g. `.example.com`)   |
 | `cookieMaxAge`    | number | No       | `2592000` (30d) | Duration in seconds                   |
 | `defaultRedirect` | string | No       | `"/dashboard"`  | Route after login                     |
 
@@ -540,7 +533,6 @@ Creates the logout handler.
 | `clientSecret` | string | No       |               | Client secret for confidential clients      |
 | `cookieName`   | string | No       | `"am25_sess"` | Cookie name                                 |
 | `accessCookieName` | string | No   | `"am25_at"`   | Access token cookie name                    |
-| `cookieDomain` | string | No       |               | Cookie domain                               |
 | `redirectTo`   | string | No       | `"/"`         | Route after logout                          |
 
 **Federated logout:** Logout revokes the current OAuth grant before deleting either cookie and redirecting to Gate. If revocation cannot be confirmed, the handler returns `502` and preserves the cookies so the operation can be retried.
