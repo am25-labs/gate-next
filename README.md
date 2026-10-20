@@ -469,10 +469,10 @@ interface GateUser {
 
 | Function       | Returns              | User ID       | Recommended use   |
 | -------------- | -------------------- | ------------- | ----------------- |
-| `getSession()` | `JWTPayload \| null` | `session.sub` | Access raw claims |
+| `getSession()` | `JWTPayload \| null` | `session.sub` | Access validated claims and current identity |
 | `getUser()`    | `GateUser \| null`   | `user.id`     | Business logic    |
 
-Use `getUser()` for business logic. Use `getSession()` only if you need direct access to JWT claims.
+Use `getUser()` for business logic. `getSession()` preserves the verified token metadata while replacing profile, admin and organization claims with the current values returned by Gate. This object is an application session view, not the original signed JWT payload.
 
 ## API Reference
 
@@ -554,7 +554,7 @@ Use this helper in resource-server endpoints that accept bearer tokens. `verifyT
 
 ### `createSessionHelpers(options)`
 
-Creates helpers to access the session in Server Components.
+Creates helpers to access the session in Server Components, Server Actions and Route Handlers.
 
 | Option       | Type   | Required | Default       | Description                          |
 | ------------ | ------ | -------- | ------------- | ------------------------------------ |
@@ -566,13 +566,17 @@ Returns a `SessionHelpers` object:
 
 | Helper                 | Returns                | Description                              |
 | ---------------------- | ---------------------- | ---------------------------------------- |
-| `getSession()`         | `JWTPayload \| null`   | Raw JWT payload                          |
+| `getSession()`         | `JWTPayload \| null`   | Verified metadata with current identity   |
 | `getUser()`            | `GateUser \| null`     | Formatted user data                      |
 | `isAuthenticated()`    | `boolean`              | Whether a session exists                 |
 | `requireAuth()`        | `GateUser`             | User data, throws if not authenticated   |
 | `requireAdmin()`       | `GateUser`             | User data, throws if not admin           |
 
-All functions are cached per request using `React.cache()`. Session reads validate the JWT locally and confirm its current grant, user state, and client access with Gate. Validation fails closed when Gate cannot be reached.
+Session reads validate the JWT type, issuer, session audience and client binding locally, then confirm the current grant, user state and client access with Gate. The same response supplies the current profile, admin status and organization context to `getSession()` and `getUser()`, including cleared fields. Validation fails closed when Gate cannot be reached or returns an invalid profile.
+
+`React.cache()` deduplicates reads during Server Component rendering. A weak map keyed by Next.js's request cookie store also shares concurrent validation within a Server Action or Route Handler; changing the token triggers a new check. No validation result is shared between HTTP requests, even when they carry the same token. Proxy and downstream API checks remain separate authorization boundaries.
+
+Version 4.1.0 requires Gate's session endpoint to include `organizationId`, `organizationType` and `organizationRole` alongside its existing profile fields. Deploy Gate first, publish this SDK version, then update the app dependencies and lockfiles. Apps can then remove additional profile/directory reads for the authenticated user while keeping their local role and tenant checks. No new cookie, environment variable or database migration is required.
 
 ### `getLoginUrl(options)`
 

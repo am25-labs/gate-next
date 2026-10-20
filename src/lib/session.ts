@@ -36,15 +36,18 @@ export function createSessionHelpers(options: SessionHelpersOptions): SessionHel
   if (!clientId) throw new Error("clientId is required");
 
   const normalizedIssuer = issuer.replace(/\/$/, "");
+  const nsIsAdmin = `${normalizedIssuer}/is_admin`;
+  const nsOrganizationId = `${normalizedIssuer}/organization_id`;
+  const nsOrganizationType = `${normalizedIssuer}/organization_type`;
+  const nsOrganizationRole = `${normalizedIssuer}/organization_role`;
+  const sessions = new WeakMap<object, { token: string; result: Promise<JWTPayload | null> }>();
 
-  const getSession = cache(async (): Promise<JWTPayload | null> => {
+  const loadSession = async (token: string): Promise<JWTPayload | null> => {
     try {
-      const cookieStore = await cookies();
-      const token = cookieStore.get(cookieName)?.value;
-
-      if (!token) return null;
-
-      const payload = await verifyTokenWithJWKS(token, normalizedIssuer, "st+jwt");
+      const payload = await verifyTokenWithJWKS(token, normalizedIssuer, "st+jwt", {
+        audience: "urn:am25:gate:session",
+      });
+      if (payload.client_id !== clientId || typeof payload.sub !== "string") return null;
       const response = await fetch(
         `${normalizedIssuer}/api/auth/session?client_id=${encodeURIComponent(clientId)}`,
         {
@@ -54,20 +57,41 @@ export function createSessionHelpers(options: SessionHelpersOptions): SessionHel
       );
       if (!response.ok) return null;
 
-      const activeSession = (await response.json()) as { id?: unknown };
-      if (activeSession.id !== payload.sub) return null;
+      const activeSession: unknown = await response.json();
+      if (!isSessionProfile(activeSession) || activeSession.id !== payload.sub) return null;
 
-      return payload;
+      return {
+        ...payload,
+        email: activeSession.email,
+        name: activeSession.name ?? "",
+        lastName: activeSession.lastName ?? "",
+        picture: activeSession.profileImageUrl,
+        [nsIsAdmin]: activeSession.isAdmin,
+        [nsOrganizationId]: activeSession.organizationId,
+        [nsOrganizationType]: activeSession.organizationType,
+        [nsOrganizationRole]: activeSession.organizationRole,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const getSession = cache(async (): Promise<JWTPayload | null> => {
+    try {
+      const cookieStore = await cookies();
+      const token = cookieStore.get(cookieName)?.value;
+      if (!token) return null;
+
+      const existing = sessions.get(cookieStore);
+      if (existing?.token === token) return existing.result;
+
+      const result = loadSession(token);
+      sessions.set(cookieStore, { token, result });
+      return result;
     } catch {
       return null;
     }
   });
-
-  const nsIsAdmin = `${normalizedIssuer}/is_admin`;
-  const namespace = normalizedIssuer;
-  const nsOrganizationId = `${namespace}/organization_id`;
-  const nsOrganizationType = `${namespace}/organization_type`;
-  const nsOrganizationRole = `${namespace}/organization_role`;
 
   const getUser = cache(async (): Promise<GateUser | null> => {
     const session = await getSession();
@@ -125,4 +149,31 @@ export function createSessionHelpers(options: SessionHelpersOptions): SessionHel
     requireAuth,
     requireAdmin,
   };
+}
+
+function isSessionProfile(value: unknown): value is {
+  id: string;
+  email: string;
+  name: string | null;
+  lastName: string | null;
+  profileImageUrl: string | null;
+  isAdmin: boolean;
+  organizationId: string | null;
+  organizationType: "CUSTOMER" | "INTERNAL" | null;
+  organizationRole: "OWNER" | "MEMBER" | null;
+} {
+  if (!value || typeof value !== "object") return false;
+  const profile = value as Record<string, unknown>;
+  const nullableString = (field: unknown) => field === null || typeof field === "string";
+  return (
+    typeof profile.id === "string" &&
+    typeof profile.email === "string" &&
+    nullableString(profile.name) &&
+    nullableString(profile.lastName) &&
+    nullableString(profile.profileImageUrl) &&
+    typeof profile.isAdmin === "boolean" &&
+    nullableString(profile.organizationId) &&
+    (profile.organizationType === null || profile.organizationType === "CUSTOMER" || profile.organizationType === "INTERNAL") &&
+    (profile.organizationRole === null || profile.organizationRole === "OWNER" || profile.organizationRole === "MEMBER")
+  );
 }
