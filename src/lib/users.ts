@@ -1,4 +1,6 @@
 import { cookies } from "next/headers";
+import { fetchGate, readGateJson } from "./request.js";
+import { GateUnavailableError } from "./errors.js";
 
 export interface UserHelpersOptions {
   issuer: string;
@@ -33,17 +35,19 @@ export function createUserHelpers(options: UserHelpersOptions): UserHelpers {
 
     if (!token) return [];
 
-    const response = await fetch(`${issuer.replace(/\/$/, "")}/oauth/users`, {
+    const response = await fetchGate(`${issuer.replace(/\/$/, "")}/oauth/users`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
       cache: "no-store",
     });
 
-    if (!response.ok) return [];
+    if (response.status === 401 || response.status === 403) return [];
+    if (!response.ok) throw new GateUnavailableError("Gate directory request failed");
 
-    const data = (await response.json()) as { users?: GateAssignedUser[] };
-    return data.users ?? [];
+    const data = await readGateJson<{ users?: GateAssignedUser[] } | null>(response);
+    if (!Array.isArray(data?.users)) throw new GateUnavailableError("Gate returned an invalid directory");
+    return data.users;
   };
 
   const syncUsers = async (sync: UserSync): Promise<GateAssignedUser[]> => {

@@ -1,6 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyTokenWithJWKS } from "./lib/jwks.js";
 import { createAuthorizationResponse } from "./lib/oauth-transaction.js";
+import { GateUnavailableError } from "./lib/errors.js";
+import { fetchGate, readGateJson } from "./lib/request.js";
+import { gateUnavailableResponse } from "./lib/unavailable-response.js";
 
 export interface GateProxyOptions {
   issuer: string;
@@ -47,13 +50,13 @@ export function createGateProxy(options: GateProxyOptions) {
     }
 
     try {
-      await verifyTokenWithJWKS(token, issuer, "st+jwt");
-    } catch {
-      return redirectToLogin(request, issuer, clientId, redirectUri, scopes);
-    }
-
-    try {
-      const sessionRes = await fetch(
+      const payload = await verifyTokenWithJWKS(token, issuer, "st+jwt", {
+        audience: "urn:am25:gate:session",
+      });
+      if (payload.client_id !== clientId || typeof payload.sub !== "string") {
+        return redirectToLogin(request, issuer, clientId, redirectUri, scopes);
+      }
+      const sessionRes = await fetchGate(
         `${issuer.replace(/\/$/, "")}/api/auth/session?client_id=${encodeURIComponent(clientId)}`,
         { headers: { Cookie: `${cookieName}=${token}` }, cache: "no-store" },
       );
@@ -61,10 +64,15 @@ export function createGateProxy(options: GateProxyOptions) {
       if (sessionRes.status === 403) {
         return NextResponse.redirect(new URL("/unauthorized", issuer));
       }
-      if (!sessionRes.ok) {
+      if (sessionRes.status === 401) {
         return redirectToLogin(request, issuer, clientId, redirectUri, scopes);
       }
-    } catch {
+      if (!sessionRes.ok) return gateUnavailableResponse();
+
+      const session = await readGateJson<{ id?: unknown } | null>(sessionRes);
+      if (session?.id !== payload.sub) return gateUnavailableResponse();
+    } catch (error) {
+      if (error instanceof GateUnavailableError) return gateUnavailableResponse();
       return redirectToLogin(request, issuer, clientId, redirectUri, scopes);
     }
 

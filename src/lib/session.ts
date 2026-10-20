@@ -2,6 +2,8 @@ import { cookies } from "next/headers";
 import { cache } from "react";
 import { verifyTokenWithJWKS } from "./jwks.js";
 import type { JWTPayload } from "jose";
+import { GateUnavailableError } from "./errors.js";
+import { fetchGate, readGateJson } from "./request.js";
 
 export interface SessionHelpersOptions {
   issuer: string;
@@ -48,17 +50,20 @@ export function createSessionHelpers(options: SessionHelpersOptions): SessionHel
         audience: "urn:am25:gate:session",
       });
       if (payload.client_id !== clientId || typeof payload.sub !== "string") return null;
-      const response = await fetch(
+      const response = await fetchGate(
         `${normalizedIssuer}/api/auth/session?client_id=${encodeURIComponent(clientId)}`,
         {
           headers: { Cookie: `${cookieName}=${token}` },
           cache: "no-store",
         },
       );
-      if (!response.ok) return null;
+      if (response.status === 401 || response.status === 403) return null;
+      if (!response.ok) throw new GateUnavailableError("Gate session validation failed");
 
-      const activeSession: unknown = await response.json();
-      if (!isSessionProfile(activeSession) || activeSession.id !== payload.sub) return null;
+      const activeSession = await readGateJson(response);
+      if (!isSessionProfile(activeSession) || activeSession.id !== payload.sub) {
+        throw new GateUnavailableError("Gate returned an invalid session profile");
+      }
 
       return {
         ...payload,
@@ -71,7 +76,8 @@ export function createSessionHelpers(options: SessionHelpersOptions): SessionHel
         [nsOrganizationType]: activeSession.organizationType,
         [nsOrganizationRole]: activeSession.organizationRole,
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof GateUnavailableError) throw error;
       return null;
     }
   };
@@ -88,7 +94,8 @@ export function createSessionHelpers(options: SessionHelpersOptions): SessionHel
       const result = loadSession(token);
       sessions.set(cookieStore, { token, result });
       return result;
-    } catch {
+    } catch (error) {
+      if (error instanceof GateUnavailableError) throw error;
       return null;
     }
   });

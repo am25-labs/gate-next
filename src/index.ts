@@ -1,5 +1,6 @@
 export { createGateProxy, gateProxy } from "./proxy.js";
 export type { GateProxyOptions } from "./proxy.js";
+export { GateUnavailableError } from "./lib/errors.js";
 
 export { createCallbackHandler, handleCallback } from "./handlers/callback.js";
 export type { CallbackHandlerOptions } from "./handlers/callback.js";

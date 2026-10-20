@@ -1,5 +1,7 @@
 import type { JWTPayload } from "jose";
 import { verifyTokenWithJWKS } from "./jwks.js";
+import { fetchGate, readGateJson } from "./request.js";
+import { GateUnavailableError } from "./errors.js";
 
 export interface ActiveAccessTokenOptions {
   issuer: string;
@@ -15,17 +17,20 @@ export async function verifyActiveAccessToken(
     audience: clientId,
   });
 
-  const response = await fetch(`${normalizedIssuer}/oauth/userinfo`, {
+  const response = await fetchGate(`${normalizedIssuer}/oauth/userinfo`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new Error("Gate rejected the access token");
+    if (response.status === 401 || response.status === 403) {
+      throw new Error("Gate rejected the access token");
+    }
+    throw new GateUnavailableError("Gate access token validation failed");
   }
 
-  const currentClaims = (await response.json()) as JWTPayload;
-  if (currentClaims.sub !== payload.sub) {
-    throw new Error("Gate returned a different subject");
+  const currentClaims = await readGateJson<JWTPayload | null>(response);
+  if (!currentClaims || currentClaims.sub !== payload.sub) {
+    throw new GateUnavailableError("Gate returned an invalid identity");
   }
 
   return {

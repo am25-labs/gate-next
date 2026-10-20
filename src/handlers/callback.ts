@@ -1,5 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { verifyTokenWithJWKS } from "../lib/jwks.js";
+import { fetchGate, readGateJson } from "../lib/request.js";
+import { GateUnavailableError } from "../lib/errors.js";
+import { gateUnavailableResponse } from "../lib/unavailable-response.js";
 import {
   clearOAuthTransaction,
   normalizeReturnTo,
@@ -68,7 +71,7 @@ export function createCallbackHandler(options: CallbackHandlerOptions) {
     }
 
     try {
-      const tokenResponse = await fetch(tokenEndpoint, {
+      const tokenResponse = await fetchGate(tokenEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
@@ -84,7 +87,8 @@ export function createCallbackHandler(options: CallbackHandlerOptions) {
       });
 
       if (!tokenResponse.ok) {
-        const errorData = await tokenResponse.json().catch(() => ({}));
+        const errorData = await readGateJson<{ error?: string } | null>(tokenResponse);
+        if (tokenResponse.status !== 400 || errorData?.error === "invalid_client") return gateUnavailableResponse();
         console.error("Token exchange failed:", errorData);
         return clearOAuthTransaction(
           NextResponse.redirect(
@@ -94,27 +98,18 @@ export function createCallbackHandler(options: CallbackHandlerOptions) {
         );
       }
 
-      const tokens = await tokenResponse.json();
+      const tokens = await readGateJson<Record<string, unknown> | null>(tokenResponse);
       if (
+        !tokens ||
         typeof tokens.session_token !== "string" ||
         typeof tokens.access_token !== "string"
       ) {
-        return clearOAuthTransaction(
-          NextResponse.redirect(
-            `${appOrigin}/login?error=invalid_token_response`,
-          ),
-          state,
-        );
+        throw new GateUnavailableError("Gate returned an invalid token response");
       }
 
       if (transaction.expectsIdToken) {
         if (typeof tokens.id_token !== "string") {
-          return clearOAuthTransaction(
-            NextResponse.redirect(
-              `${appOrigin}/login?error=invalid_id_token`,
-            ),
-            state,
-          );
+          throw new GateUnavailableError("Gate did not return the requested ID token");
         }
 
         const idToken = await verifyTokenWithJWKS(
@@ -164,6 +159,7 @@ export function createCallbackHandler(options: CallbackHandlerOptions) {
 
       return response;
     } catch (error) {
+      if (error instanceof GateUnavailableError) return gateUnavailableResponse();
       console.error("Callback handler error:", error);
       return clearOAuthTransaction(
         NextResponse.redirect(`${appOrigin}/login?error=callback_failed`),

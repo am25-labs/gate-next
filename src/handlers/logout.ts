@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { fetchGate } from "../lib/request.js";
+import { GateUnavailableError } from "../lib/errors.js";
+import { gateUnavailableResponse } from "../lib/unavailable-response.js";
 
 export interface LogoutHandlerOptions {
   issuer: string;
@@ -43,7 +46,7 @@ export function createLogoutHandler(options: LogoutHandlerOptions) {
         });
         if (clientSecret) body.set("client_secret", clientSecret);
 
-        const revokeResponse = await fetch(`${issuer.replace(/\/$/, "")}/oauth/revoke`, {
+        const revokeResponse = await fetchGate(`${issuer.replace(/\/$/, "")}/oauth/revoke`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body,
@@ -55,7 +58,8 @@ export function createLogoutHandler(options: LogoutHandlerOptions) {
             { status: 502 },
           );
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof GateUnavailableError) return gateUnavailableResponse();
         return NextResponse.json(
           { error: "logout_revocation_failed" },
           { status: 502 },

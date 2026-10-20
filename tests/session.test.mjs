@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { SignJWT, jwtVerify } from "jose";
-import ts from "typescript";
+import { createLoader } from "./load.mjs";
 
 const issuer = "https://gate.test";
 const ns = (name) => `${issuer}/${name}`;
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-const source = ts.transpileModule(readFileSync(new URL("../src/lib/session.ts", import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+
 
 async function fixture(t) {
   const issue = (claims = {}, { audience = "urn:am25:gate:session", type = "st+jwt" } = {}) => new SignJWT({ sub: "user", client_id: "portal", grant_id: "grant", sessionVersion: 2, email: "old@example.test", name: "Old", lastName: "Name", picture: "old.png", [ns("is_admin")]: true, [ns("organization_id")]: "old-org", [ns("organization_type")]: "INTERNAL", [ns("organization_role")]: "OWNER", ...claims }).setProtectedHeader({ alg: "RS256", typ: type }).setIssuedAt().setIssuer(issuer).setAudience(audience).setExpirationTime(claims.exp ?? "30d").sign(privateKey);
@@ -27,14 +26,14 @@ async function fixture(t) {
       return payload;
     } },
   };
-  const compiled = { exports: {} };
-  new Function("require", "module", "exports", source)((name) => { if (!(name in mocks)) throw new Error(`Unexpected dependency: ${name}`); return mocks[name]; }, compiled, compiled.exports);
+  const load = createLoader(mocks);
+  const helpers = load("lib/session.ts").createSessionHelpers({ issuer: `${issuer}/`, clientId: "portal" });
   t.mock.method(globalThis, "fetch", async (url, options) => {
     requests.push({ url, options });
     if (state.fail) throw new Error("Offline");
     return Response.json(state.profile, { status: state.status });
   });
-  return { issue, state, requests, verifications: () => verifications, nextRequest: () => { store = makeStore(); }, helpers: compiled.exports.createSessionHelpers({ issuer: `${issuer}/`, clientId: "portal" }) };
+  return { issue, state, requests, verifications: () => verifications, nextRequest: () => { store = makeStore(); }, helpers, GateUnavailableError: load("lib/errors.ts").GateUnavailableError };
 }
 
 test("one request shares a single active-session validation across concurrent helpers outside React rendering", async (t) => {
@@ -93,19 +92,19 @@ test("wrong-client, wrong-audience, wrong-type and expired cookies cannot reach 
 
 test("revoked, denied and unavailable sessions fail closed without falling back to JWT admin claims", async (t) => {
   const f = await fixture(t);
-  for (const status of [401, 403, 503]) {
+  for (const status of [401, 403]) {
     f.nextRequest(); f.state.status = status;
     assert.equal(await f.helpers.getSession(), null);
     await assert.rejects(f.helpers.requireAdmin(), /Not authenticated/);
   }
   f.nextRequest(); f.state.fail = true;
-  assert.equal(await f.helpers.getUser(), null);
+  await assert.rejects(f.helpers.getUser(), f.GateUnavailableError);
 });
 
 test("malformed, incomplete and mismatched current profiles are rejected", async (t) => {
   const f = await fixture(t); const profile = f.state.profile;
   for (const current of [null, {}, { ...profile, id: "another-user" }, { ...profile, isAdmin: "true" }, { ...profile, organizationType: "unknown" }, { ...profile, organizationRole: "ADMIN" }, { ...profile, email: undefined }, { ...profile, profileImageUrl: undefined }]) {
     f.nextRequest(); f.state.profile = current;
-    assert.equal(await f.helpers.getSession(), null);
+    await assert.rejects(f.helpers.getSession(), f.GateUnavailableError);
   }
 });

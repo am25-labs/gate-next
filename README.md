@@ -476,6 +476,34 @@ Use `getUser()` for business logic. `getSession()` preserves the verified token 
 
 ## API Reference
 
+### Temporary Gate failures
+
+Version 4.2.0 exports `GateUnavailableError` with `code: "gate_unavailable"` and `status: 503`. Network failures, request timeouts, HTTP 408/429/5xx, unavailable signing keys and invalid upstream responses are operational failures. Session, directory, access-token and step-up helpers propagate this error instead of returning an unauthenticated session, an empty directory or an invalid proof. Explicit 401/403 responses keep their authorization behavior.
+
+Every SDK fetch and JWKS request has a 10-second deadline. Fetches are uncached, do not follow redirects and are never retried automatically, including authorization-code exchanges, token revocation and OTP verification. Proxy, callback and logout handlers return 503 with `Cache-Control: no-store` and `Retry-After: 5` during temporary failures, without clearing app cookies or redirecting to login. A callback transaction is also retained when an outage occurs; if its authorization code was already consumed, start a new login rather than retrying the code exchange automatically.
+
+Client Route Handlers should preserve the availability distinction:
+
+```ts
+import { GateUnavailableError } from "@am25/gate-next";
+
+try {
+  const user = await getUser();
+  if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
+  return Response.json({ user });
+} catch (error) {
+  if (error instanceof GateUnavailableError) {
+    return Response.json({ error: error.code }, {
+      status: error.status,
+      headers: { "Cache-Control": "no-store", "Retry-After": "5" },
+    });
+  }
+  throw error;
+}
+```
+
+Server Components can let the error reach their error boundary. Server Actions should return a temporary-failure result without treating the user as logged out. Existing broad catch blocks must not turn this error into 401, `null` or an empty list. Deploy Gate's operational-error handling first, publish SDK 4.2.0, then update app dependencies, lockfiles and error handling. No new environment variable or database migration is required.
+
 ### `createGateProxy(options)`
 
 Creates a proxy to protect routes in Next.js 16.
